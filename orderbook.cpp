@@ -1,20 +1,12 @@
 #include <bits/stdc++.h>
 using namespace std;
-enum class OrderType
-{
-    GoodTillCancel,
-    FillandKill
-};
-enum class Side
-{
-    Buy,
-    Sell
-};
+
+#include "Order.h"
 
 struct LevelInfo
 {
-   int price_;
-   int quantity_;
+    int price_;
+    int quantity_;
 };
 
 using LevelInfos = vector<LevelInfo>;
@@ -39,73 +31,6 @@ public:
         return asks_;
     }
 };
-
-class Order
-{
-private:
-    OrderType orderType_;
-    int orderId_;
-    int price_;
-    int quantity_;
-    int remQuantity_;
-    Side side_;
-
-public:
-    Order(OrderType orderType, int orderId, Side side, int price, int quantity)
-        : orderType_{orderType},
-          orderId_{orderId},
-          side_{side},
-          price_{price},
-          quantity_{quantity},
-          remQuantity_{quantity}
-    {
-    }
-
-    int GetOrderId() const
-    {
-        return orderId_;
-    }
-
-    Side GetSide() const
-    {
-        return side_;
-    }
-    int GetPrice() const
-    {
-        return price_;
-    }
-    int GetInitialQuantity() const
-    {
-        return quantity_;
-    }
-    OrderType GetOrderType() const
-    {
-        return orderType_;
-    }
-    int GetRemainQuantity() const
-    {
-        return remQuantity_;
-    }
-    int GetFilledQuantity() const
-    {
-        return GetInitialQuantity() - GetRemainQuantity();
-    }
-    bool isFilled()
-    {
-        return GetRemainQuantity() == 0;
-    }
-    void Fill(int quantity)
-    {
-        if (quantity > remQuantity_)
-        {
-            // throw logic_error();
-        }
-        remQuantity_ -= quantity;
-    }
-};
-
-using OrderPointer = shared_ptr<Order>;
-using OrderPointers = list<OrderPointer>;
 
 class OrderModify
 {
@@ -184,8 +109,8 @@ public:
         OrderPointer order_{nullptr};
         OrderPointers::iterator location_;
     };
-    map< int, OrderPointers, greater< int>> bids_;
-    map< int, OrderPointers, less< int>> asks_;
+    map<int, OrderPointers, greater<int>> bids_;
+    map<int, OrderPointers, less<int>> asks_;
     unordered_map<int, OrderEntry> orders_;
 
     bool CanMatch(Side side, int price)
@@ -279,6 +204,21 @@ public:
             return {};
         }
 
+        if (order->GetOrderType() == OrderType::Market)
+        {
+            if (order->GetSide() == Side::Buy && !asks_.empty())
+            {
+                const auto &[worstAsk, _] = *asks_.rbegin();
+                order->ToGoodTillCancel(worstAsk);
+            }
+            else if (order->GetSide() == Side::Sell && !bids_.empty())
+            {
+                const auto &[worstBid, _] = *bids_.rbegin();
+                order->ToGoodTillCancel(worstBid);
+            }
+            else
+                return {};
+        }
         if (order->GetOrderType() == OrderType::FillandKill && !CanMatch(order->GetSide(), order->GetPrice()))
             return {};
 
@@ -341,7 +281,7 @@ public:
         bidInfos.reserve(orders_.size());
         askInfos.reserve(orders_.size());
 
-        auto CreateLevelInfos = []( int price, const OrderPointers &orders)
+        auto CreateLevelInfos = [](int price, const OrderPointers &orders)
         {
             return LevelInfo{
                 price,
@@ -349,7 +289,7 @@ public:
                     orders.begin(),
                     orders.end(),
                     0,
-                    []( int runningSum, const OrderPointer &order)
+                    [](int runningSum, const OrderPointer &order)
                     {
                         return runningSum + order->GetRemainQuantity();
                     })};
@@ -362,21 +302,14 @@ public:
 
         return OrderbookLevelInfos{bidInfos, askInfos};
     }
-    int Size(){
-        return orders_.size();
-    }
-
+   
 };
-
 
 int main()
 {
     Orderbook orderbook;
-    const int orderId=1;
-    orderbook.AddOrder(make_shared<Order>(OrderType::GoodTillCancel,orderId,Side::Buy,100,10));
-    cout<<orderbook.Size()<<endl;
-    orderbook.CancelOrder(orderId);
-    cout<<orderbook.Size()<<endl;
     
+  
+
     return 0;
 }
