@@ -6,5 +6,4 @@ enum class OrderType
     FillandKill,
     GoodForDay,
     Market,
-    
 };

@@ -1,5 +1,8 @@
 #include <bits/stdc++.h>
 using namespace std;
+#include <numeric>
+#include <chrono>
+#include <ctime>
 
 #include "Order.h"
 
@@ -112,6 +115,60 @@ public:
     map<int, OrderPointers, greater<int>> bids_;
     map<int, OrderPointers, less<int>> asks_;
     unordered_map<int, OrderEntry> orders_;
+
+private:
+    mutable std::mutex ordersMutex_;
+    std::atomic<bool> shutdown_{false};
+    std::condition_variable shutdownConditionVariable_;
+
+    void PruneGoodForDayOrders()
+    {
+        using namespace std::chrono;
+        const auto end = hours(16);
+
+        while (true)
+        {
+            const auto now = system_clock::now();
+            const auto now_c = system_clock::to_time_t(now);
+            tm now_parts = *localtime(&now_c);
+
+            if (now_parts.tm_hour >= end.count())
+                now_parts.tm_mday += 1;
+
+            now_parts.tm_hour = end.count();
+            now_parts.tm_min = 0;
+            now_parts.tm_sec = 0;
+
+            auto next = system_clock::from_time_t(mktime(&now_parts));
+            auto till = next - now + milliseconds(100);
+
+            {
+                unique_lock ordersLock{ordersMutex_};
+
+                if (shutdown_.load(std::memory_order_acquire) ||
+                    shutdownConditionVariable_.wait_for(ordersLock, till) == std::cv_status::no_timeout)
+                    return;
+            }
+
+            vector<int> orderIds;
+
+            {
+                std::scoped_lock ordersLock{ordersMutex_};
+
+                for (const auto &[_, entry] : orders_)
+                {
+                    const auto &[order, _] = entry;
+
+                    if (order->GetOrderType() != OrderType::GoodForDay)
+                        continue;
+
+                    orderIds.push_back(order->GetOrderId());
+                }
+            }
+
+            CancelOrders(orderIds);
+        }
+    }
 
     bool CanMatch(Side side, int price)
     {
@@ -238,6 +295,36 @@ public:
         orders_.insert({order->GetOrderId(), OrderEntry{order, iterator}});
         return MatchOrders();
     }
+    void CancelOrders(vector<int> &OrderId)
+    {
+        for (auto it : OrderId)
+        {
+            if (!orders_.count(it))
+                return;
+
+            const auto &[order, orderIterator] = orders_.at(it);
+            orders_.erase(it);
+
+            if (order->GetSide() == Side::Sell)
+            {
+                auto price = order->GetPrice();
+                auto &orders = asks_.at(price);
+                orders.erase(orderIterator);
+                if (orders.empty())
+                {
+                    asks_.erase(price);
+                }
+            }
+            else
+            {
+                auto price = order->GetPrice();
+                auto &orders = bids_.at(price);
+                orders.erase(orderIterator);
+                if (orders.empty())
+                    bids_.erase(price);
+            }
+        }
+    }
     void CancelOrder(int OrderId)
     {
         if (!orders_.count(OrderId))
@@ -302,14 +389,11 @@ public:
 
         return OrderbookLevelInfos{bidInfos, askInfos};
     }
-   
 };
 
 int main()
 {
     Orderbook orderbook;
-    
-  
 
     return 0;
 }
