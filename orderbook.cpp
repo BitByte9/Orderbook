@@ -25,11 +25,11 @@ public:
         : bids_{bids},
           asks_(asks) {}
 
-    const LevelInfos &GetBids()
+    const LevelInfos &GetBids() const
     {
         return bids_;
     }
-    const LevelInfos &GetAska()
+    const LevelInfos &GetAska() const
     {
         return asks_;
     }
@@ -93,11 +93,11 @@ public:
     {
     }
 
-    const TradeInfo &GetBidInfo()
+    const TradeInfo &GetBidInfo() const
     {
         return bidTrade_;
     }
-    const TradeInfo &GetAskInfo()
+    const TradeInfo &GetAskInfo() const
     {
         return askTrade_;
     }
@@ -120,6 +120,7 @@ private:
     mutable std::mutex ordersMutex_;
     std::atomic<bool> shutdown_{false};
     std::condition_variable shutdownConditionVariable_;
+    std::thread goodForDayThread_;
 
     void PruneGoodForDayOrders()
     {
@@ -157,7 +158,7 @@ private:
 
                 for (const auto &[_, entry] : orders_)
                 {
-                    const auto &[order, _] = entry;
+                    const auto &[order, __] = entry;
 
                     if (order->GetOrderType() != OrderType::GoodForDay)
                         continue;
@@ -236,26 +237,27 @@ private:
                                        TradeInfo{ask->GetOrderId(), ask->GetPrice(), quantity}});
             }
         }
-        if (!bids_.empty())
-        {
-            auto &[_, bids] = *bids_.begin();
-            auto &order = bids.front();
-            if (order->GetOrderType() == OrderType::FillandKill)
-                CancelOrder(order->GetOrderId());
-        }
-        if (!asks_.empty())
-        {
-            auto &[_, asks] = *asks_.begin();
-            auto &order = asks.front();
-            if (order->GetOrderType() == OrderType::FillandKill)
-                CancelOrder(order->GetOrderId());
-        }
         return trades;
     }
 
 public:
+    Orderbook()
+    {
+        goodForDayThread_ = std::thread(&Orderbook::PruneGoodForDayOrders, this);
+    }
+
+    ~Orderbook()
+    {
+        shutdown_.store(true, std::memory_order_release);
+        shutdownConditionVariable_.notify_all();
+        if (goodForDayThread_.joinable())
+            goodForDayThread_.join();
+    }
+
     Trades AddOrder(OrderPointer order)
     {
+        bool wasMarket = (order->GetOrderType() == OrderType::Market);
+        bool wasFillAndKill = (order->GetOrderType() == OrderType::FillandKill);
         if (orders_.count(order->GetOrderId()))
         {
             return {};
@@ -278,7 +280,7 @@ public:
         }
         if (order->GetOrderType() == OrderType::FillandKill && !CanMatch(order->GetSide(), order->GetPrice()))
             return {};
-
+       
         OrderPointers::iterator iterator;
         if (order->GetSide() == Side::Buy)
         {
@@ -293,14 +295,26 @@ public:
             iterator = next(orders.begin(), orders.size() - 1);
         }
         orders_.insert({order->GetOrderId(), OrderEntry{order, iterator}});
-        return MatchOrders();
+        auto trades = MatchOrders();
+        if (wasMarket)
+        {
+            if (orders_.count(order->GetOrderId()))
+            {
+                CancelOrder(order->GetOrderId());
+            }
+        }
+        if (wasFillAndKill && orders_.count(order->GetOrderId()))
+        {
+            CancelOrder(order->GetOrderId());
+        }
+        return trades;
     }
     void CancelOrders(vector<int> &OrderId)
     {
         for (auto it : OrderId)
         {
             if (!orders_.count(it))
-                return;
+                continue;
 
             const auto &[order, orderIterator] = orders_.at(it);
             orders_.erase(it);
@@ -391,9 +405,193 @@ public:
     }
 };
 
-int main()
+namespace
 {
-    Orderbook orderbook;
+    optional<Side> ParseSide(const string &s)
+    {
+        if (s == "buy")
+            return Side::Buy;
+        if (s == "sell")
+            return Side::Sell;
+        return nullopt;
+    }
+
+    optional<OrderType> ParseOrderType(const string &s)
+    {
+        if (s == "gtc")
+            return OrderType::GoodTillCancel;
+        if (s == "fak")
+            return OrderType::FillandKill;
+        if (s == "gfd")
+            return OrderType::GoodForDay;
+        if (s == "mkt")
+            return OrderType::Market;
+        return nullopt;
+    }
+
+    void PrintTrades(const Trades &trades)
+    {
+        if (trades.empty())
+        {
+            cout << "No trades.\n";
+            return;
+        }
+        for (const auto &trade : trades)
+        {
+            const auto &bid = trade.GetBidInfo();
+            const auto &ask = trade.GetAskInfo();
+            cout << "Trade | bidId=" << bid.orderId_
+                 << " askId=" << ask.orderId_
+                 << " qty=" << bid.quantity_
+                 << " bidPx=" << bid.price_
+                 << " askPx=" << ask.price_ << '\n';
+        }
+    }
+
+    void PrintBook(Orderbook &book)
+    {
+        const auto infos = book.GetOrderInfo();
+        cout << "----- ORDER BOOK -----\n";
+        cout << "Bids:\n";
+        for (const auto &lvl : infos.GetBids())
+            cout << "  px=" << lvl.price_ << " qty=" << lvl.quantity_ << '\n';
+        cout << "Asks:\n";
+        for (const auto &lvl : infos.GetAska())
+            cout << "  px=" << lvl.price_ << " qty=" << lvl.quantity_ << '\n';
+        cout << "----------------------\n";
+    }
+
+    void PrintHelp()
+    {
+        cout << "Commands:\n";
+        cout << "  add <id> <buy|sell> <qty> <gtc|fak|gfd|mkt> <price>\n";
+        cout << "  cancel <id>\n";
+        cout << "  modify <id> <buy|sell> <qty> <price>\n";
+        cout << "  book\n";
+        cout << "  help\n";
+        cout << "  exit\n";
+    }
+}
+
+int main(int argc, char **argv)
+{
+    const bool apiMode = (argc > 1 && string(argv[1]) == "--api");
+    Orderbook book;
+    if (!apiMode)
+        PrintHelp();
+
+    string line;
+    while (true)
+    {
+        if (!apiMode)
+            cout << "\n> ";
+
+        if (!getline(cin, line))
+            break;
+
+        istringstream iss(line);
+        string cmd;
+        iss >> cmd;
+        if (cmd.empty())
+            continue;
+
+        if (cmd == "exit")
+            break;
+
+        if (cmd == "help")
+        {
+            PrintHelp();
+            if (apiMode)
+                cout << "__END__\n";
+            continue;
+        }
+
+        if (cmd == "book")
+        {
+            PrintBook(book);
+            if (apiMode)
+                cout << "__END__\n";
+            continue;
+        }
+
+        if (cmd == "cancel")
+        {
+            int id;
+            if (!(iss >> id))
+            {
+                cout << "Usage: cancel <id>\n";
+            }
+            else
+            {
+                book.CancelOrder(id);
+                cout << "Cancel requested for id=" << id << '\n';
+            }
+            if (apiMode)
+                cout << "__END__\n";
+            continue;
+        }
+
+        if (cmd == "modify")
+        {
+            int id, qty, price;
+            string sideText;
+            if (!(iss >> id >> sideText >> qty >> price))
+            {
+                cout << "Usage: modify <id> <buy|sell> <qty> <price>\n";
+                if (apiMode)
+                    cout << "__END__\n";
+                continue;
+            }
+            auto side = ParseSide(sideText);
+            if (!side)
+            {
+                cout << "Invalid side.\n";
+                if (apiMode)
+                    cout << "__END__\n";
+                continue;
+            }
+
+            auto trades = book.MatchOrder(OrderModify{id, price, *side, qty});
+            PrintTrades(trades);
+            if (apiMode)
+                cout << "__END__\n";
+            continue;
+        }
+
+        if (cmd == "add")
+        {
+            int id, qty, price;
+            string sideText, typeText;
+            if (!(iss >> id >> sideText >> qty >> typeText >> price))
+            {
+                cout << "Usage: add <id> <buy|sell> <qty> <gtc|fak|gfd|mkt> <price>\n";
+                if (apiMode)
+                    cout << "__END__\n";
+                continue;
+            }
+
+            auto side = ParseSide(sideText);
+            auto type = ParseOrderType(typeText);
+            if (!side || !type)
+            {
+                cout << "Invalid side or order type.\n";
+                if (apiMode)
+                    cout << "__END__\n";
+                continue;
+            }
+
+            auto order = make_shared<Order>(*type, id, *side, price, qty);
+            auto trades = book.AddOrder(order);
+            PrintTrades(trades);
+            if (apiMode)
+                cout << "__END__\n";
+            continue;
+        }
+
+        cout << "Unknown command. Type 'help'.\n";
+        if (apiMode)
+            cout << "__END__\n";
+    }
 
     return 0;
 }

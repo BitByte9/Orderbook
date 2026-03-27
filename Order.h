@@ -18,10 +18,10 @@ public:
     Order(OrderType orderType, int orderId, Side side, int price, int quantity)
         : orderType_{orderType},
           orderId_{orderId},
-          side_{side},
           price_{price},
           quantity_{quantity},
-          remQuantity_{quantity}
+          remQuantity_{quantity},
+          side_{side}
     {
     }
 

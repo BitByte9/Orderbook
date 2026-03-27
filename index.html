@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Orderbook UI</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="container">
+    <h1>Orderbook</h1>
+
+    <section class="panel">
+      <h2>Add Order</h2>
+      <form id="add-form">
+        <input type="number" id="add-id" placeholder="Order ID" required>
+        <select id="add-side">
+          <option value="buy">Buy</option>
+          <option value="sell">Sell</option>
+        </select>
+        <input type="number" id="add-qty" placeholder="Quantity" min="1" required>
+        <select id="add-type">
+          <option value="gtc">GTC</option>
+          <option value="fak">FAK</option>
+          <option value="gfd">GFD</option>
+          <option value="mkt">MKT</option>
+        </select>
+        <input type="number" id="add-price" placeholder="Price (0 for MKT)" required>
+        <button type="submit">Add</button>
+      </form>
+      <p id="add-status" class="status"></p>
+    </section>
+
+    <section class="panel">
+      <h2>Modify Order</h2>
+      <form id="modify-form">
+        <input type="number" id="mod-id" placeholder="Order ID" required>
+        <select id="mod-side">
+          <option value="buy">Buy</option>
+          <option value="sell">Sell</option>
+        </select>
+        <input type="number" id="mod-qty" placeholder="Quantity" min="1" required>
+        <input type="number" id="mod-price" placeholder="Price" min="0" required>
+        <button type="submit">Modify</button>
+      </form>
+    </section>
+
+    <section class="panel">
+      <h2>Cancel Order</h2>
+      <form id="cancel-form">
+        <input type="number" id="cancel-id" placeholder="Order ID" required>
+        <button type="submit">Cancel</button>
+      </form>
+      <button id="refresh-btn">Refresh Book</button>
+    </section>
+
+    <section class="grid">
+      <div class="panel">
+        <h2>Bids</h2>
+        <table>
+          <thead><tr><th>Price</th><th>Qty</th></tr></thead>
+          <tbody id="bids-body"></tbody>
+        </table>
+      </div>
+      <div class="panel">
+        <h2>Asks</h2>
+        <table>
+          <thead><tr><th>Price</th><th>Qty</th></tr></thead>
+          <tbody id="asks-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Trades</h2>
+      <pre id="trades-log">No trades yet.</pre>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
